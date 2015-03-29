@@ -1,0 +1,64 @@
+Buliding the environment of  TrustMe OS running:
+
+1. Installing  qemu-system-arm 
+	-- sudo apt-get install qemu-system-arm
+   OR
+    -- download the code of qemu-system-arm and compile it youself
+
+2. making sd image
+    a. installing linaro-image-tools
+		sudo apt-get install linaro-image-tools
+	b. download  two  page form following link:
+	    http://releases.linaro.org/platform/linaro-n/nano/alpha-3/linaro-natty-nano-tar-20110302-0.tar.gz
+        http://releases.linaro.org/platform/linaro-n/hwpacks/alpha-3/hwpack_linaro-vexpress_20110302-0_armel_supported.tar.gz	
+	c. making a sd image
+   	   sudo linaro-media-create --image_file vexpress-a9.img --dev vexpress-a9 --binray linaro-natty-nano-tar-20110302-0.tar.gz --hwpack hwpack_linaro-vexpress_20110302-0_armel_supported.tar.gz
+    d. checking the image using the follow  command:
+	   file vexpress-a9.img
+       /* This command will output info as following:*/
+       vexpress-a9.img: x86 boot sector; partition 1: ID=0xe, active, starthead 1, startsector 63, 106432 sectors; partition 2: ID=0x83, starthead 0, startsector 106496, 6184960 sectors, code offset 0x0
+	e. copy your kernel.img  to SD image
+		sudo sudo mount -o loop,offset=$[63*512] -t auto vexpress.img  ./mountpoint_kernel
+		/*mount the first prartition  to ./mountpoint_kernel directory*/
+		/*offset=$[startsector * blksize]*/
+		sudo cp kernel.img ./mountpoint_kernel
+	f. copy your demo to SD image
+	    sudo mount  -o loop,offset=$[106496*512] -t auto vexpress.img  ./mountpoint_demo
+		/*mount the second prartition to ./mountpoint_demo driectory */
+		/*offset=$[startsector * blksize]*/
+		sudo cp demo ./mountpoint_demo
+3.compile the  uboot
+	a. download the u-boot-2012.04.tar.bz2 
+	b. tar -xvfj u-boot-2012.04.tar.bz2
+	c. modify arch/arm/lib/board.c as following
+        // board_init_r()     /*remove this line code*/
+	e. executing follow command:
+     	export ARCH=arm
+		export CROSS_COMPILE=arm-linux-gnueabi-
+		make ca9x4_ct_vxp_config
+		make -j20
+4. starting the kernel
+   a. starting uboot 
+   qemu-system-arm -M vexpress-a9 -m 1024M -serial stdio -sd ./vexpress.img -kernel uboot
+   b. entering the uboot console
+      -> mmc part                              /*looking image prartition info*/
+	  -> mmc list                              /*looking mmc device info*/
+	         MMC: 0
+	  ->fatls mmc 0                            /*listing frist prartition file info */
+	  ->fatload mmc 0 0x60000000  kernel.img   /*copy kernel.img to DDR*/
+	  ->other common command                   /*other uboot command for starting*/
+5. starting debug mode
+	you can start system in debug mode, if you want to going a debug mode, using step 5  instead of step 4 
+   a. starting uboot 
+   qemu-system-arm -M vexpress-a9 -m 1024M -serial stdio -sd ./vexpress.img -kernel uboot -s -S
+   b. in other console, input target remote tcp::1234
+   c. set breakpoint where the syetem starting.
+   d. input c on the debug console
+   e. the uboot start run,then entere the uboot console
+      -> mmc part                              /*looking image prartition info*/
+	  -> mmc list                              /*looking mmc device info*/
+	         MMC: 0
+	  ->fatls mmc 0                            /*listing frist prartition file info */
+	  ->fatload mmc 0 0x60000000  kernel.img   /*copy kernel.img to DDR*/
+	  ->other common command                   /*other uboot command for starting*/
+   d. it will stop at the breakpoint you set.
