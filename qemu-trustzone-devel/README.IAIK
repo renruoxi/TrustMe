@@ -1,0 +1,182 @@
+This file covers ARM TrustZone related changes on top of the qemu-linaro
+source tree which are developed during the EU FP7 "SEPIA" project by
+the Institute for Applied Information Processing and Communications (IAIK)
+at Graz University of Technology.
+
+Note that the TrustZone support in this QEMU fork is considered
+HIGHLY EXPERIMENTAL and UNSTABLE.
+
+Code parts of particular interest are marked with comments including
+the word "TrustZone" to allow easy grepping. A simple "grep -r TrustZone ."
+should list the interesting parts without the need to go through the
+entire GIT history.
+
+--- Integration with GDB (Coprocessor registers)
+IAIK's TrustZone patch series integrates with GDB in an attempt to allow
+debugging of QEMU and of (dual-world) target code itself. Simply attach a
+recent version of GDB with XML target descriptor support and do
+a "info all-registers" or a "maintenance print register-groups" to show the
+relevant registers. An invocation "info all-registers" may cause side-effects
+if your CPU model contains CP registers with side-effects on read.
+
+The target descriptor is automatically derived during arm_cpu_realize. Note
+that this code is stil HIGHLY experimental and does not (yet) integrate fully
+with the ARM_CP_OVERRIDE flag and with registers banks containing
+CP_ANY wildcards.
+
+The encoding for the GDB register number of a co-processor register is
+derived by adding 0x40000000 to the value returned by ENCODE_CP_REG, resulting
+in two sub-spaces:
+  0x40000000-0x5FFFFFFF Normal World CP registers
+  0x60000000-0x7FFFFFFF Secure World CP registers
+
+Note that we currently do _NOT_ override the current privilege level during
+GDB access, which may cause register with read/write hooks to report
+exceptions when e.g. accessed from user mode.
+
+The register names are derived by concatenating the coprocessor name with
+the name given in the corresponding ARMCPRegInfo structure. Normal world
+instances of banked registers additionally carry a "_NS" suffix, common or
+secure-only register do not have any suffix.
+
+We unconditionally assume secure-world operation on CPU models without
+the ARM_FEATURE_TRUSTZONE feature, thus no normal world registers with "_NS"
+suffix are exposed in the target descriptors for these cores.
+
+Note that GDB caches register values - so a "flushregs" command may be
+required by certain usage patterns.
+
+--- Integration with GDB (System registers)
+Similar to the coprocessor register we provide GDB integration for the
+regular ARM system register banks. We define the following GDB register
+numbers:
+
+  Banked SP registers:
+    0x30000000 sp_usr
+    0x30000001 sp_svc
+    0x30000002 sp_abt
+    0x30000003 sp_und
+    0x30000004 sp_irq
+    0x30000005 sp_fiq
+    0x30000006 sp_mon (only if target has ARM_FEATURE_TRUSTZONE)
+
+  Banked LR registers:
+    0x30000100 lr_usr
+    0x30000101 lr_svc
+    0x30000102 lr_abt
+    0x30000103 lr_und
+    0x30000104 lr_irq
+    0x30000105 lr_fiq
+    0x30000106 lr_mon (only if target has ARM_FEATURE_TRUSTZONE)
+
+  Banked SPSR registers:
+    0x30000201 spsr_svc
+    0x30000202 spsr_abt
+    0x30000203 spsr_und
+    0x30000204 spsr_irq
+    0x30000205 spsr_fiq
+    0x30000206 spsr_mon (only if target has ARM_FEATURE_TRUSTZONE)
+
+  Non-FIQ mode bank for r8-r12:
+    0x30000300 r8_usr
+    0x30000301 r9_usr
+    0x30000302 r10_usr
+    0x30000303 r11_usr
+    0x30000304 r12_usr
+
+  FIQ mode bank for r8-r12:
+    0x30000300 r8_fiq
+    0x30000301 r9_fiq
+    0x30000302 r10_fiq
+    0x30000303 r11_fiq
+    0x30000304 r12_fiq
+
+  The QEMU gdbstub side properly synchronizes register access to the
+  banked registers and the active "main" view. Note however that we
+  currently are unable to tell GDB that a write to the "banked"
+  or the "main" view changed the "other" view. Use the "flushregs" GDB
+  command to manually invalidate both views, when needed.
+
+--- Proof-of-concept security extensions for the ARM GIC
+
+Since commit 03b63ac2 there is proof-of-concept support for ARM
+security extensions in the ARM GIC device model on the vexpress-a9 and
+vexpress-a15 board models. Furthermore this commit includes a workaround
+to allow ill-behaved system software, which treats the write-only ICDSGIR
+register as read-modify-write register to work without causing a hw_error.
+
+The GIC security extensions are HIGHLY EXPERIMENTAL at the time of this
+writing.
+
+--- Test Case Setup: OpenVirtualization
+The primary goals of this patch series is to allow open-source
+TrustZone software to be simulated with QEMU. OpenVirtualization
+recently released an SDK for their open-source TEE, which we will
+use as key test case for the patch series.
+
+----- Basic setup
+* Grab a Linux 2.6.38.7 tarball (sha1sum:
+
+* Grab or build a suitable ARM root filesystem image for use with
+  OpenVirtualization.
+
+  [Being lazy we simple converted the "alip-ael-armv5-min-debug.cramfs"
+  image from http://www.linux-arm.org/ into an ext2 image (using genext2fs)]
+
+* Grab a recent snapshot of OpenVirtualization's SDK from openvirtualization.org
+  [We used their SDK_june_4_2012.tar.bz2 snapshot]
+
+* Build an OpenVirtualization image for the Versatile Express board with
+  Cortex-A15 core-tile (standard configuration of the abovementioned SDK).
+
+  [NOTE: Depending on the toolchain version you are using it might be
+   necessary to slightly adjust the Makefiles. There is a simple workaround,
+   if you get lots of complaints about missing support for the 'SMC #0'
+   instruction: Simple add "-mcpu=cortex-a15" to the C compiler flags]
+
+  [NOTE: The last step of the build process wants Linux root privileges to
+   insert the OTZ files into the normal world root-fs image via
+   mount/cp/umount. It might should possible to use genext2fs with -x option
+   to achieve a similar effect without root privileges.]
+
+ Once your OpenVirtualization build is complete you have a "normal.elf" and
+ "otzone.elf" file in the "trustzone/tzone_sdk/bin" directory of your
+ OpenVirtualization tree.
+
+ Test 1: Test if the normal world Linux kernel - which should work as secure
+     world OS as well ;)
+
+   $ arm-softmmu/qemu-system-arm -M vexpress-a15 -m 2G -kernel normal.elf \
+       -sd <path/to/your/rootfs>
+
+   ... and there goes the virtual penguin!
+
+
+ Test 2: Test the OpenVirtualization TEE
+   $ arm-softmmu/qemu-system-arm -M vexpress-a15 -m 2G -kernel otzone.elf \
+       -sd <path/to/your/rootfs>
+
+   ... wait for the virtual penguin to boot. Then try the following commands
+   (inside your virtual environment):
+
+   # insmod /otz_client.ko
+   # /bin/otzapp.elf
+
+   The demo application should complete all test successfully (given that the
+   ARM GIC security extensions patch is enabled in hw/arm_gic.c).
+
+   Further interesting experiments:
+    * Start QEMU with "-S -s" and attach GDB from a second console, then
+      define a HW breakpoint on your secure monitor vector ...
+      (NOTE: GDB gets a bit confused with secure/normal world and its
+       different, views of the MMU so do not expect it to do backtraces
+       over a "world-switch")
+
+    * Start QEMU with "-d coproc,coproc_ns" to log coprocessor register
+      reads and writes from both worlds - in particular watch out for the MMU
+      control register :)
+
+    * Ask GDB about system control registers (see "info all-registers")
+      Note that the GDB integration with system registers is still HIGHLY
+      EXPERIMENTAL (at the moment we do not eliminate duplicate register
+      descriptions ...)
