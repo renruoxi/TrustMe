@@ -9,6 +9,7 @@
      ldr sp, =\context
 .endm
 
+
 .macro SaveState
         stmdb   sp, {r0-lr}^
         add     r6, sp, #BankedOffset
@@ -66,6 +67,12 @@ monitor_vector_table_base:
     ldr pc, reset_vector      
     ldr pc, irq_vector         
     ldr pc, fiq_vector 
+.global  linux_start_info
+linux_start_info:
+	.long  re_ro
+	.long  re_r1
+	.long  re_r2
+	.long  re_r3
 
 reset_vector:
     .long   _start
@@ -153,6 +160,10 @@ fiq_handler :
 _start:
    
     cps #CPSR_MODE_MONITOR
+	ldr re_r0, r0
+	ldr re_r1, r1
+	ldr re_r2, r2
+	ldr re_r3, r3
     set_smm_stack 
     mov r0, #SCR_S                 
     CP15_SCR_WRITE r0
